@@ -81,13 +81,12 @@
 
 // // In this file you can include the rest of your app's specific main process
 // // code. You can also put them in separate files and require them here.
-
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { startRecording, stopRecording } from './speech'
 
 function createWindow() {
-  const mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     width: 900,
     height: 670,
     webPreferences: {
@@ -98,10 +97,12 @@ function createWindow() {
     }
   })
 
-  mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
+  win.loadURL(process.env.ELECTRON_RENDERER_URL)
 
   ipcMain.on('start-recording', startRecording)
   ipcMain.on('stop-recording', stopRecording)
+
+  console.log('✅ App ready')
 }
 
 app.whenReady().then(createWindow)

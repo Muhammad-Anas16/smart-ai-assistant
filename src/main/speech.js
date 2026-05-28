@@ -1,60 +1,124 @@
 import mic from 'mic'
 import fs from 'fs'
-import { exec } from 'child_process'
 import path from 'path'
-import { BrowserWindow } from 'electron'
+import { exec } from 'child_process'
+import { BrowserWindow, app } from 'electron'
 
-let micInstance
+let micInstance = null
+let micStream = null
+
+const basePath = app.isPackaged ? process.resourcesPath : app.getAppPath()
+
+const audioDir = path.join(basePath, 'resources/whisper/audio')
+const audioPath = path.join(audioDir, 'output.raw')
+
+// 🔥 FIXED PATH (your actual folder)
+const exePath = path.join(basePath, 'resources/whisper/bin/Release/whisper-cli.exe')
+const modelPath = path.join(basePath, 'resources/whisper/models/ggml-tiny.en.bin')
 
 const send = (channel, data) => {
   const win = BrowserWindow.getAllWindows()[0]
-  win?.webContents.send(channel, data)
+  if (win) win.webContents.send(channel, data)
 }
 
+/* ---------------- START RECORDING ---------------- */
 export const startRecording = () => {
-  micInstance = mic({
-    rate: '16000',
-    channels: '1',
-    fileType: 'wav'
-  })
+  try {
+    if (!fs.existsSync(audioDir)) {
+      fs.mkdirSync(audioDir, { recursive: true })
+    }
 
-  const stream = micInstance.getAudioStream()
+    if (fs.existsSync(audioPath)) {
+      fs.unlinkSync(audioPath)
+    }
 
-  const filePath = path.join(process.cwd(), 'resources/whisper/audio/output.wav')
-  const output = fs.createWriteStream(filePath)
+    micInstance = mic({
+      rate: '16000',
+      channels: '1',
+      bitwidth: '16',
+      encoding: 'signed-integer',
+      endian: 'little',
+      fileType: 'raw'
+    })
 
-  stream.pipe(output)
-  micInstance.start()
+    micStream = micInstance.getAudioStream()
+    const out = fs.createWriteStream(audioPath)
 
-  send('status', '🎤 Recording started...')
+    micStream.pipe(out)
+
+    micStream.on('error', (err) => {
+      console.log('MIC ERROR:', err)
+    })
+
+    micInstance.start()
+
+    console.log('🎤 Recording started...')
+    send('status', 'Recording...')
+  } catch (e) {
+    console.log('START ERROR:', e)
+  }
 }
 
+/* ---------------- STOP RECORDING ---------------- */
 export const stopRecording = () => {
-  if (!micInstance) return
+  try {
+    if (!micInstance) return
 
-  micInstance.stop()
-  send('status', '🛑 Recording stopped...')
+    console.log('🛑 Stopping...')
+    micInstance.stop()
 
-  setTimeout(runWhisper, 1000)
+    micStream.once('close', () => {
+      console.log('📁 Audio saved')
+      runWhisper()
+    })
+  } catch (e) {
+    console.log('STOP ERROR:', e)
+  }
 }
 
+/* ---------------- WHISPER ---------------- */
 export const runWhisper = () => {
-  send('status', '🧠 Transcribing...')
+  console.log('EXE:', exePath)
+  console.log('MODEL:', modelPath)
+  console.log('AUDIO:', audioPath)
 
-  const exe = path.join(process.cwd(), 'resources/whisper/bin/whisper-cli.exe')
-  const model = path.join(process.cwd(), 'resources/whisper/models/ggml-tiny.en.bin')
-  const audio = path.join(process.cwd(), 'resources/whisper/audio/output.wav')
+  if (!fs.existsSync(exePath)) {
+    console.log('❌ whisper-cli.exe NOT FOUND')
+    return
+  }
 
-  const cmd = `"${exe}" -m "${model}" -f "${audio}"`
+  if (!fs.existsSync(modelPath)) {
+    console.log('❌ MODEL NOT FOUND')
+    return
+  }
 
-  exec(cmd, (err, stdout) => {
+  if (!fs.existsSync(audioPath)) {
+    console.log('❌ AUDIO NOT FOUND')
+    return
+  }
+
+  console.log('🧠 Running Whisper...')
+
+  const cmd = `"${exePath}" -m "${modelPath}" -f "${audioPath}" --raw`
+
+  exec(cmd, (err, stdout, stderr) => {
     if (err) {
-      send('status', '❌ Error in Whisper')
-      console.log(err)
+      console.log('❌ WHISPER ERROR:', err)
+      console.log(stderr)
       return
     }
 
-    send('status', '✅ Done!')
-    send('transcript', stdout)
+    const text = stdout
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop()
+
+    console.log('\n======================')
+    console.log('🎤 SPEECH TO TEXT:')
+    console.log(text || stdout)
+    console.log('======================\n')
+
+    send('transcript', text || stdout)
   })
 }
